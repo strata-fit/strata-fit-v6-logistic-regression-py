@@ -17,6 +17,32 @@ from flwr.server.strategy import (
     FedAvg,
     FedAdam,
     FedYogi,
+    FedAvgM,
+    FaultTolerantFedAvg,
+    # "Bulyan",
+    # "DPFedAvgAdaptive",
+    # "DPFedAvgFixed",
+    # "DifferentialPrivacyClientSideAdaptiveClipping",
+    # "DifferentialPrivacyClientSideFixedClipping",
+    # "DifferentialPrivacyServerSideAdaptiveClipping",
+    # "DifferentialPrivacyServerSideFixedClipping",
+    # "FaultTolerantFedAvg",
+    # "FedAdagrad",
+    # "FedAdam",
+    # "FedAvg",
+    # "FedAvgAndroid",
+    # "FedAvgM",
+    # "FedMedian",
+    # "FedOpt",
+    # "FedProx",
+    # "FedTrimmedAvg",
+    # "FedXgbBagging",
+    # "FedXgbCyclic",
+    # "FedXgbNnAvg",
+    # "FedYogi",
+    # "Krum",
+    # "QFedAvg",
+    # "Strategy",
 )
 
 # ---- Strategy registry (server-side only; no client-code changes required) ----
@@ -24,12 +50,14 @@ _STRATEGIES = {
     "fedavg": lambda **cfg: FedAvg(**cfg),
     "fedadam": lambda **cfg: FedAdam(**cfg),
     "fedyogi": lambda **cfg: FedYogi(**cfg),
+    "fedavgm": lambda **cfg: FedAvgM(**cfg),
+    "FaultTolerantFedAvg".lower(): lambda **cfg: FaultTolerantFedAvg(**cfg),
     # Note: FedProx requires client-side proximal term in the loss;
     # with scikit-learn LR we cannot inject it, so it won't behave as intended.
 }
 
 # Strategies which need a Flower Parameters at construction
-_NEEDS_INIT = {"fedadam", "fedadagrad", "fedyogi", "fedavgm"}
+_NEEDS_INIT = {"fedadam", "fedadagrad", "fedyogi", "fedavgm", "FaultTolerantFedAvg".lower()}
 
 def _make_initial_parameters(n_features: int, n_classes: int) -> Parameters:
     rows = 1 if n_classes <= 2 else n_classes
@@ -54,13 +82,16 @@ def _strategy_from_name(name: str, **cfg):
     # --- ensure initial_parameters is a real Flower Parameters for FedOpt-family ---
     if key in {"fedadam", "fedadagrad", "fedyogi", "fedavgm"}:
         ip = cfg.get("initial_parameters", None)
+        print(ip)
         if ip is None:
+            print("No initial parameters")
             if n_features is None or n_classes is None:
                 raise ValueError(
                     "Strategy requires initial_parameters; supply it explicitly "
                     "or pass n_features and n_classes so the bridge can build zeros."
                 )
             cfg["initial_parameters"] = _make_initial_parameters(n_features, n_classes)
+            print("Initial parameters", cfg["initial_parameters"])
         else:
             # make robust: accept lists/np arrays or our JSON-style {"arrays":[...]}
             try:
@@ -188,8 +219,8 @@ def master_flower(
     # Build strategy
     strat = _strategy_from_name(
         strategy_name,
-        # n_features=n_features,
-        # n_classes=n_classes,
+        n_features=n_features,
+        n_classes=n_classes,
         **strategy_kwargs,
     )
 

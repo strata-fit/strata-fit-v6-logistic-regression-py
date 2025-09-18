@@ -39,9 +39,9 @@ master_task = client.task.create(
             'classes': [0, 1],
             'num_rounds': num_iterations,                     # Flower rounds
             'n_local_epochs': 1,                 # scikit-learn local epochs per round
-            'strategy_name': 'fedavg',                # try 'fedadam' or 'fedyogi' too
+            'strategy_name': 'FaultTolerantFedAvg',                # try 'fedadam' or 'fedyogi' too
             'strategy_kwargs': {
-                # 'eta': 0.1,          # server lr (FedOpt family)
+                #'eta': 0.1,          # server lr (FedOpt family)
                 # optional extras, e.g.:
                 # 'beta_1': 0.9, 'beta_2': 0.99, 'tau': 1e-9, 'eta_l': 0.1,
                 # For FedAvgM: 'server_learning_rate': 1.0, 'server_momentum': 0.9
