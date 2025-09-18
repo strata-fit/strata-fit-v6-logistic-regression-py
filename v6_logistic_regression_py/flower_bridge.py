@@ -107,13 +107,6 @@ def _mk_fitres(updated_params: Parameters, num_examples: int, metrics: Dict[str,
     )
 
 
-def _strategy_from_name(name: str, **cfg):
-    key = name.strip().lower()
-    if key not in _STRATEGIES:
-        raise ValueError(f"Unknown strategy '{name}'. Available: {list(_STRATEGIES.keys())}")
-    return _STRATEGIES[key](**cfg)
-
-
 def _broadcast_fit_and_collect(
     client: AlgorithmClient,
     org_ids: List[int],

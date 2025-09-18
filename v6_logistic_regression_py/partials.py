@@ -11,7 +11,6 @@ from vantage6.algorithm.tools.util import info
 from vantage6.algorithm.tools.decorators import algorithm_client, data
 
 from v6_logistic_regression_py.helper import (
-    aggregate,
     coordinate_task,
     export_model,
     initialize_model
