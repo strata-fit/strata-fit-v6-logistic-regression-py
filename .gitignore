@@ -107,13 +107,5 @@ venv.bak/
 .idea/
 .DS_Store
 
-# Image repositories
-docker_hub.sh
-
-# Input and output
-v6_kmeans_py/local/input
-v6_kmeans_py/local/output
-v6_kmeans_py/local/token
-
 .psi-ignore
 report.md

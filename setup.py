@@ -30,6 +30,7 @@ setup(
         'vantage6-client',
         'pandas>=1.2.1',
         'scipy>=1.7.3',
-        'scikit-learn>=1.0.2'
+        'scikit-learn>=1.0.2',
+        'flwr>=1.20.0',
     ]
 )
