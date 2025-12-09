@@ -27,6 +27,18 @@ def logistic_regression_partial(
     n_local_iterations: int = 1,
     **model_kwargs
 ) -> Dict[str, any]:
+    return _logistic_regression_partial(df, model_attributes, predictors, outcome, n_local_iterations, **model_kwargs)
+
+
+
+def _logistic_regression_partial(
+    df: pd.DataFrame, 
+    model_attributes: Dict[str, List[float]], 
+    predictors: List[str], 
+    outcome: str,
+    n_local_iterations: int = 1,
+    **model_kwargs
+) -> Dict[str, any]:
     """
     Fits logistic regression model on local dataset.
 
@@ -83,6 +95,14 @@ def compute_loss_partial(
     predictors: List[str], 
     outcome: str
 ) -> Dict[str, Any]:
+    return _compute_loss_partial(df, model_attributes, predictors, outcome)
+
+def _compute_loss_partial(
+    df: pd.DataFrame, 
+    model_attributes: Dict[str, list], 
+    predictors: List[str], 
+    outcome: str
+) -> Dict[str, Any]:
     """
     Computes logistic regression model loss on local dataset.
 
@@ -123,6 +143,15 @@ def compute_loss_partial(
 
 @data(1)
 def run_validation(
+    df: pd.DataFrame, 
+    parameters: List[np.ndarray], 
+    classes: List[str], 
+    predictors: List[str], 
+    outcome: str
+) -> Dict[str, Any]:
+    return _run_validation(df, parameters, classes, predictors, outcome)
+
+def _run_validation(
     df: pd.DataFrame, 
     parameters: List[np.ndarray], 
     classes: List[str], 
