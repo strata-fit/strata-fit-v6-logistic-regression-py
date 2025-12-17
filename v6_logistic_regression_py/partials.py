@@ -5,7 +5,7 @@ import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import log_loss
 from sklearn.metrics import confusion_matrix
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Type, Union
 from vantage6.algorithm.client import AlgorithmClient
 from vantage6.algorithm.tools.util import info
 from vantage6.algorithm.tools.decorators import algorithm_client, data
@@ -13,7 +13,9 @@ from vantage6.algorithm.tools.decorators import algorithm_client, data
 from v6_logistic_regression_py.helper import (
     coordinate_task,
     export_model,
-    initialize_model
+    filter_model_init_kwargs,
+    initialize_model,
+    resolve_linear_model_class,
 )
 
 MODEL_ATTRIBUTE_KEYS = ["coef_", "intercept_", "classes_"]
@@ -25,9 +27,18 @@ def logistic_regression_partial(
     predictors: List[str], 
     outcome: str,
     n_local_iterations: int = 1,
+    model_class: Union[str, Type[LogisticRegression]] = LogisticRegression,
     **model_kwargs
 ) -> Dict[str, any]:
-    return _logistic_regression_partial(df, model_attributes, predictors, outcome, n_local_iterations, **model_kwargs)
+    return _logistic_regression_partial(
+        df,
+        model_attributes,
+        predictors,
+        outcome,
+        n_local_iterations,
+        model_class=model_class,
+        **model_kwargs,
+    )
 
 
 
@@ -37,10 +48,11 @@ def _logistic_regression_partial(
     predictors: List[str], 
     outcome: str,
     n_local_iterations: int = 1,
+    model_class: Union[str, Type[LogisticRegression]] = LogisticRegression,
     **model_kwargs
 ) -> Dict[str, any]:
     """
-    Fits logistic regression model on local dataset.
+    Fits a linear-model estimator (defaults to LogisticRegression) on the local dataset.
 
     Parameters
     ----------
@@ -52,6 +64,8 @@ def _logistic_regression_partial(
         List of predictor variable names.
     outcome : str
         Outcome variable name.
+    model_class : Union[str, Type[BaseEstimator]]
+        Class (or import path) from sklearn.linear_model to instantiate.
 
     Returns
     -------
@@ -66,21 +80,21 @@ def _logistic_regression_partial(
     y = df[outcome].values
 
     # Create local LogisticRegression estimator object
-    base_kwargs = dict(
-        max_iter=n_local_iterations,
-        warm_start=True,
-    )
-    # Merge base + extras (penalty, solver, l1_ratio, C, etc.)
-    full_kwargs = {**base_kwargs, **{k: v for k, v in model_kwargs.items() if v is not None}}
-    model = initialize_model(LogisticRegression, model_attributes=model_attributes, **model_kwargs)
+    base_kwargs = dict(max_iter=n_local_iterations, warm_start=True)
+    model_cls = resolve_linear_model_class(model_class)
+    # Merge base + extras (penalty, solver, l1_ratio, C, etc.) and drop unsupported keys
+    candidate_kwargs = {**base_kwargs, **{k: v for k, v in model_kwargs.items() if v is not None}}
+    init_kwargs = filter_model_init_kwargs(model_cls, candidate_kwargs)
+
+    model = initialize_model(model_cls, model_attributes=model_attributes, **init_kwargs)
     
     # Ignore convergence failure due to low local epochs
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
         model.fit(X, y)
         info('Training round finished')
-    
-    model_attributes = export_model(model, attribute_keys=MODEL_ATTRIBUTE_KEYS)
+    attribute_keys = [k for k in MODEL_ATTRIBUTE_KEYS if hasattr(model, k)]
+    model_attributes = export_model(model, attribute_keys=attribute_keys)
 
     return {
         'model_attributes': model_attributes,
@@ -93,18 +107,20 @@ def compute_loss_partial(
     df: pd.DataFrame, 
     model_attributes: Dict[str, list], 
     predictors: List[str], 
-    outcome: str
+    outcome: str,
+    model_class: Union[str, Type[LogisticRegression]] = LogisticRegression,
 ) -> Dict[str, Any]:
-    return _compute_loss_partial(df, model_attributes, predictors, outcome)
+    return _compute_loss_partial(df, model_attributes, predictors, outcome, model_class=model_class)
 
 def _compute_loss_partial(
     df: pd.DataFrame, 
     model_attributes: Dict[str, list], 
     predictors: List[str], 
-    outcome: str
+    outcome: str,
+    model_class: Union[str, Type[LogisticRegression]] = LogisticRegression,
 ) -> Dict[str, Any]:
     """
-    Computes logistic regression model loss on local dataset.
+    Computes model loss on the local dataset.
 
     Parameters
     ----------
@@ -116,6 +132,8 @@ def _compute_loss_partial(
         Predictor variables.
     outcome : str
         Outcome variable.
+    model_class : Union[str, Type[BaseEstimator]]
+        Class (or import path) from sklearn.linear_model to instantiate.
 
     Returns
     -------
@@ -130,7 +148,8 @@ def _compute_loss_partial(
     y = df[outcome].values
 
     # Initialize local model instance
-    model = initialize_model(LogisticRegression, model_attributes)
+    model_cls = resolve_linear_model_class(model_class)
+    model = initialize_model(model_cls, model_attributes)
 
     # Compute loss
     loss = log_loss(y, model.predict_proba(X))
@@ -144,35 +163,40 @@ def _compute_loss_partial(
 @data(1)
 def run_validation(
     df: pd.DataFrame, 
-    parameters: List[np.ndarray], 
-    classes: List[str], 
+    parameters: Union[List[np.ndarray], Dict[str, Any]], 
+    classes: Optional[List[str]], 
     predictors: List[str], 
-    outcome: str
+    outcome: str,
+    model_class: Union[str, Type[LogisticRegression]] = LogisticRegression,
 ) -> Dict[str, Any]:
-    return _run_validation(df, parameters, classes, predictors, outcome)
+    return _run_validation(df, parameters, classes, predictors, outcome, model_class=model_class)
 
 def _run_validation(
     df: pd.DataFrame, 
-    parameters: List[np.ndarray], 
-    classes: List[str], 
+    parameters: Union[List[np.ndarray], Dict[str, Any]], 
+    classes: Optional[List[str]], 
     predictors: List[str], 
-    outcome: str
+    outcome: str,
+    model_class: Union[str, Type[LogisticRegression]] = LogisticRegression,
 ) -> Dict[str, Any]:
     """
-    Validates logistic regression model on local dataset.
+    Validates a linear-model estimator on the local dataset.
 
     Parameters
     ----------
     df : pd.DataFrame
         Local data frame for validation.
-    parameters : List[np.ndarray]
-        Model parameters for validation.
-    classes : List[str]
-        List of class labels.
+    parameters : Union[List[np.ndarray], Dict[str, Any]]
+        Model parameters for validation. If a list/tuple is provided, the legacy
+        order is [intercept, coef]. If a dict is provided, keys are used directly.
+    classes : List[str], optional
+        List of class labels (provide for classifiers that require classes_).
     predictors : List[str]
         Predictor variables for validation.
     outcome : str
         Outcome variable for validation.
+    model_class : Union[str, Type[BaseEstimator]]
+        Class (or import path) from sklearn.linear_model to instantiate.
 
     Returns
     -------
@@ -187,22 +211,33 @@ def _run_validation(
     y = df[outcome].values
 
     # Initialize LogisticRegression estimator
-    model_attributes=dict(
-            intercept_ = np.array(parameters[0]),
-            coef_ = np.array(parameters[1]),
-            classes_ = np.array(classes)
-            )
-    model = initialize_model(LogisticRegression, model_attributes)
+    # Build attributes dict from legacy list/tuple or explicit dict
+    if isinstance(parameters, dict):
+        model_attributes = {k: np.array(v) for k, v in parameters.items()}
+    elif isinstance(parameters, (list, tuple)):
+        model_attributes = {}
+        if len(parameters) >= 1:
+            # legacy ordering: [intercept, coef]
+            model_attributes["intercept_"] = np.array(parameters[0])
+        if len(parameters) >= 2:
+            model_attributes["coef_"] = np.array(parameters[1])
+    else:
+        raise TypeError("parameters must be a dict or a list/tuple")
+
+    if classes is not None:
+        model_attributes["classes_"] = np.array(classes)
+    model_cls = resolve_linear_model_class(model_class)
+    model = initialize_model(model_cls, model_attributes)
 
     # Compute model accuracy
     score = model.score(X, y)
 
-    # Compute confusion matrix
-    confusion_matrix_ = confusion_matrix(
-        y, model.predict(X), labels=model.classes_
-    ).tolist()
+    result: Dict[str, Any] = {'score': score}
 
-    return {
-        'score': score,
-        'confusion_matrix': confusion_matrix_
-    }
+    # Compute confusion matrix only when classes are available (classification case)
+    if hasattr(model, "classes_"):
+        result['confusion_matrix'] = confusion_matrix(
+            y, model.predict(X), labels=model.classes_
+        ).tolist()
+
+    return result
