@@ -33,36 +33,6 @@ def coordinate_task(client: AlgorithmClient, input_: Dict[str, Any], ids: List[i
     return results
 
 
-def aggregate(global_model: BaseEstimator, results: List[Dict[str, Any]], aggregation_keys: List[str]) -> BaseEstimator:
-    """
-    Aggregate local results into a global model by weighted average of parameters.
-
-    Parameters
-    ----------
-    global_model : BaseEstimator
-        Global model instance to be updated.
-    results : List[Dict[str, Any]]
-        List of local results, each containing model attributes and the data size.
-    aggregation_keys : List[str]
-        Keys whose values are to be aggregated.
-
-    Returns
-    -------
-    BaseEstimator
-        Updated global model with averaged parameters.
-    """
-    total_data_size = sum(result['size'] for result in results)
-    summed_attributes = {key: np.zeros_like(results[0]['model_attributes'][key]) for key in aggregation_keys}
-
-    for result in results:
-        for key, value in result['model_attributes'].items():
-            if key in aggregation_keys:
-                summed_attributes[key] += np.array(value) * result['size']
-
-    aggregated_attributes = {key: value / total_data_size for key, value in summed_attributes.items()}
-    return update_model(global_model, aggregated_attributes)
-
-
 def initialize_model(model_class: Type[BaseEstimator], model_attributes: Dict[str, Any], *model_init_args: Any, **model_init_kwargs: Any) -> BaseEstimator:
     """
     Initializes an instance of the provided model class with corresponding model attributes.
@@ -151,12 +121,3 @@ def to_json_serializable(item: Union[np.ndarray, dict, Any]) -> Union[list, dict
     if isinstance(item, dict):
         return {key: to_json_serializable(value) for key, value in item.items()}
     return item
-
-def trash_outcomes(
-        df,
-        outcome,
-        survival_column="Survival.time",
-        event_column="deadstatus.event",
-        threshold=730):
-    df[outcome] = (df[survival_column] <= threshold).astype(int)
-    return df 

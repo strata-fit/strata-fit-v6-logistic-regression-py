@@ -1,0 +1,25 @@
+[global]
+n_samples = 2000
+n_features = 6
+n_informative = 4
+n_redundant = 0
+n_classes = 2
+weights = [0.5, 0.5]
+random_state = 42
+output_folder = "data"
+
+[buckets.bucket1]
+skew_class = 0
+other_frac = 0.3
+
+[buckets.bucket2]
+skew_class = 1
+other_frac = 0.3
+
+[buckets.bucket3]
+shift_feature = "f0"
+shift_value = 2.0
+
+[buckets.bucket4]
+shift_feature = "f1"
+shift_value = -2.0
