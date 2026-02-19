@@ -1,3 +1,5 @@
+import importlib
+import inspect
 import numpy as np
 from sklearn.base import BaseEstimator
 from vantage6.algorithm.client import AlgorithmClient
@@ -74,6 +76,37 @@ def export_model(model: BaseEstimator, attribute_keys: List[str]) -> Dict[str, A
         Dictionary of attribute keys and their values.
     """
     return {key: to_json_serializable(getattr(model, key)) for key in attribute_keys}
+
+
+def resolve_linear_model_class(model_class: Union[str, Type[BaseEstimator]]) -> Type[BaseEstimator]:
+    """Resolve a sklearn.linear_model class from a string or class object."""
+    if isinstance(model_class, str):
+        module_path, class_name = (
+            ("sklearn.linear_model", model_class)
+            if "." not in model_class
+            else model_class.rsplit(".", 1)
+        )
+        module = importlib.import_module(module_path)
+        cls = getattr(module, class_name)
+    elif isinstance(model_class, type):
+        cls = model_class
+    else:
+        raise TypeError("model_class must be a class or import path string")
+
+    if not issubclass(cls, BaseEstimator):
+        raise ValueError("model_class must inherit from sklearn.base.BaseEstimator")
+    if not cls.__module__.startswith("sklearn.linear_model"):
+        raise ValueError("model_class must live in sklearn.linear_model.*")
+    return cls
+
+
+def filter_model_init_kwargs(model_class: Type[BaseEstimator], candidate_kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """Strip kwargs that the model's __init__ does not accept (unless it has **kwargs)."""
+    sig = inspect.signature(model_class.__init__)
+    accepts_var_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+    if accepts_var_kwargs:
+        return candidate_kwargs
+    return {k: v for k, v in candidate_kwargs.items() if k in sig.parameters}
 
 
 def update_model(model: BaseEstimator, model_attributes: Dict[str, Any]) -> BaseEstimator:
