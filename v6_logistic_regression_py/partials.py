@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Type, Union
 from vantage6.algorithm.client import AlgorithmClient
 from vantage6.algorithm.tools.util import info
 from vantage6.algorithm.tools.decorators import algorithm_client, data
+from v6_federated_core import MethodContext, dispatch_registered_method, to_v6_result
 
 from v6_logistic_regression_py.helper import (
     coordinate_task,
@@ -30,15 +31,22 @@ def logistic_regression_partial(
     model_class: Union[str, Type[LogisticRegression]] = LogisticRegression,
     **model_kwargs
 ) -> Dict[str, any]:
-    return _logistic_regression_partial(
-        df,
-        model_attributes,
-        predictors,
-        outcome,
-        n_local_iterations,
-        model_class=model_class,
-        **model_kwargs,
+    from v6_logistic_regression_py.methods import METHOD_REGISTRY
+
+    envelope = dispatch_registered_method(
+        METHOD_REGISTRY,
+        "logistic_regression_partial",
+        {
+            "model_attributes": model_attributes,
+            "predictors": predictors,
+            "outcome": outcome,
+            "n_local_iterations": n_local_iterations,
+            "model_class": model_class,
+            "model_kwargs": model_kwargs,
+        },
+        context=MethodContext(method="logistic_regression_partial", meta={"df": df}),
     )
+    return to_v6_result(envelope)
 
 
 
@@ -110,7 +118,20 @@ def compute_loss_partial(
     outcome: str,
     model_class: Union[str, Type[LogisticRegression]] = LogisticRegression,
 ) -> Dict[str, Any]:
-    return _compute_loss_partial(df, model_attributes, predictors, outcome, model_class=model_class)
+    from v6_logistic_regression_py.methods import METHOD_REGISTRY
+
+    envelope = dispatch_registered_method(
+        METHOD_REGISTRY,
+        "compute_loss_partial",
+        {
+            "model_attributes": model_attributes,
+            "predictors": predictors,
+            "outcome": outcome,
+            "model_class": model_class,
+        },
+        context=MethodContext(method="compute_loss_partial", meta={"df": df}),
+    )
+    return to_v6_result(envelope)
 
 def _compute_loss_partial(
     df: pd.DataFrame, 
@@ -169,7 +190,21 @@ def run_validation(
     outcome: str,
     model_class: Union[str, Type[LogisticRegression]] = LogisticRegression,
 ) -> Dict[str, Any]:
-    return _run_validation(df, parameters, classes, predictors, outcome, model_class=model_class)
+    from v6_logistic_regression_py.methods import METHOD_REGISTRY
+
+    envelope = dispatch_registered_method(
+        METHOD_REGISTRY,
+        "run_validation",
+        {
+            "parameters": parameters,
+            "classes": classes,
+            "predictors": predictors,
+            "outcome": outcome,
+            "model_class": model_class,
+        },
+        context=MethodContext(method="run_validation", meta={"df": df}),
+    )
+    return to_v6_result(envelope)
 
 def _run_validation(
     df: pd.DataFrame, 

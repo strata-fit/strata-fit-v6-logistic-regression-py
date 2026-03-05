@@ -12,6 +12,8 @@ license = { file = "LICENSE" }
 keywords = ["Vantage6", "Federated Algorithms", "Supervised Learning"]
 dependencies = [
     "vantage6-client",
+    "v6-federated-core>=0.1.0",
+    "pydantic>=2,<3",
     "vantage6-algorithm-tools>=4.13.1",
     "pandas>=1.2.1",
     "scipy>=1.7.3",

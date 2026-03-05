@@ -1,9 +1,10 @@
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from vantage6.algorithm.client import AlgorithmClient
 from vantage6.algorithm.tools.util import info
 from vantage6.algorithm.tools.decorators import algorithm_client
+from v6_federated_core import MethodContext, dispatch_registered_method, to_v6_result
 
 from flwr.common import (
     Parameters,
@@ -82,16 +83,13 @@ def _strategy_from_name(name: str, **cfg):
     # --- ensure initial_parameters is a real Flower Parameters for FedOpt-family ---
     if key in {"fedadam", "fedadagrad", "fedyogi", "fedavgm"}:
         ip = cfg.get("initial_parameters", None)
-        print(ip)
         if ip is None:
-            print("No initial parameters")
             if n_features is None or n_classes is None:
                 raise ValueError(
                     "Strategy requires initial_parameters; supply it explicitly "
                     "or pass n_features and n_classes so the bridge can build zeros."
                 )
             cfg["initial_parameters"] = _make_initial_parameters(n_features, n_classes)
-            print("Initial parameters", cfg["initial_parameters"])
         else:
             # make robust: accept lists/np arrays or our JSON-style {"arrays":[...]}
             try:
@@ -125,8 +123,9 @@ def _payload_to_params(payload: Dict[str, Any]) -> Parameters:
     return ndarrays_to_parameters(nds)
 
 def _zeros_params(n_classes: int, n_features: int) -> Parameters:
-    coef = np.zeros((n_classes, n_features))
-    inter = np.zeros((n_classes,))
+    rows = 1 if n_classes <= 2 else n_classes
+    coef = np.zeros((rows, n_features))
+    inter = np.zeros((rows,))
     return ndarrays_to_parameters([coef, inter])
 
 def _mk_fitres(updated_params: Parameters, num_examples: int, metrics: Dict[str, float]) -> FitRes:
@@ -145,7 +144,7 @@ def _broadcast_fit_and_collect(
     predictors: List[str],
     outcome: str,
     n_local_epochs: int,
-    model_kwargs: Dict[str, Any] = {},
+    model_kwargs: Optional[Dict[str, Any]] = None,
 ) -> List[Tuple[None, FitRes]]:
     """
     Calls your existing partial once per node:
@@ -164,18 +163,24 @@ def _broadcast_fit_and_collect(
         "predictors": predictors,
         "outcome": outcome,
         "n_local_iterations": n_local_epochs,
+        "model_kwargs": model_kwargs or {},
     }
 
-    input_ = {
-        "method": "logistic_regression_partial",
-        "kwargs": {**base_kwargs, **model_kwargs}
-    }
+    input_ = {"method": "logistic_regression_partial", "kwargs": base_kwargs}
 
     task = client.task.create(input_=input_, organizations=org_ids)
     results = client.wait_for_results(task_id=task["id"], interval=1)
 
     fit_results: List[Tuple[None, FitRes]] = []
     for res in results:
+        if isinstance(res, dict) and "ok" in res:
+            error_messages = ", ".join(
+                error.get("message", "unknown error") for error in res.get("errors", [])
+            )
+            raise RuntimeError(
+                "Node fit task returned a failure envelope"
+                + (f": {error_messages}" if error_messages else "")
+            )
         # res: {'model_attributes': {...}, 'size': int}
         ma = res["model_attributes"]
         nds_upd = _model_attrs_to_ndarrays(ma)
@@ -200,14 +205,50 @@ def master_flower(
     n_local_epochs: int = 1,
     strategy_name: str = "fedavg",
     # Optional strategy kwargs, e.g., server_learning_rate for FedAdam/FedYogi
-    strategy_kwargs: Dict[str, Any] = {},
-    model_kwargs: Dict[str, Any] = {},
+    strategy_kwargs: Optional[Dict[str, Any]] = None,
+    model_kwargs: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    from v6_logistic_regression_py.methods import METHOD_REGISTRY
+
+    envelope = dispatch_registered_method(
+        METHOD_REGISTRY,
+        "master_flower",
+        {
+            "org_ids": org_ids,
+            "predictors": predictors,
+            "outcome": outcome,
+            "classes": classes,
+            "num_rounds": num_rounds,
+            "n_local_epochs": n_local_epochs,
+            "strategy_name": strategy_name,
+            "strategy_kwargs": strategy_kwargs or {},
+            "model_kwargs": model_kwargs or {},
+        },
+        context=MethodContext(method="master_flower", meta={"client": client}),
+    )
+    return to_v6_result(envelope)
+
+
+def _master_flower_core(
+    client: AlgorithmClient,
+    *,
+    org_ids: List[int],
+    predictors: List[str],
+    outcome: str,
+    classes: List[Any],
+    num_rounds: int = 5,
+    n_local_epochs: int = 1,
+    strategy_name: str = "fedavg",
+    strategy_kwargs: Optional[Dict[str, Any]] = None,
+    model_kwargs: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Vantage6 master that runs Flower's server-side strategy loop
     while delegating local fits to V6 one-shot partials.
     """
     info(f"Starting Flower(master) over V6 RPC | strategy={strategy_name}")
+    strategy_kwargs = strategy_kwargs or {}
+    model_kwargs = model_kwargs or {}
 
     n_features = len(predictors)
     n_classes = len(classes)
