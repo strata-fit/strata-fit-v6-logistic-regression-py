@@ -143,6 +143,7 @@ def _broadcast_fit_and_collect(
     params: Parameters,
     predictors: List[str],
     outcome: str,
+    database_label: str,
     n_local_epochs: int,
     model_kwargs: Optional[Dict[str, Any]] = None,
 ) -> List[Tuple[None, FitRes]]:
@@ -163,12 +164,22 @@ def _broadcast_fit_and_collect(
         "predictors": predictors,
         "outcome": outcome,
         "n_local_iterations": n_local_epochs,
-        "model_kwargs": model_kwargs or {},
+        **(model_kwargs or {}),
     }
 
     input_ = {"method": "logistic_regression_partial", "kwargs": base_kwargs}
 
-    task = client.task.create(input_=input_, organizations=org_ids)
+    task_create_kwargs = {
+        "input_": input_,
+        "organizations": org_ids,
+        "databases": [{"label": database_label}],
+    }
+    try:
+        task = client.task.create(**task_create_kwargs)
+    except TypeError:
+        # MockAlgorithmClient does not accept `databases`; retry without it.
+        task_create_kwargs.pop("databases", None)
+        task = client.task.create(**task_create_kwargs)
     results = client.wait_for_results(task_id=task["id"], interval=1)
 
     fit_results: List[Tuple[None, FitRes]] = []
@@ -201,6 +212,7 @@ def master_flower(
     predictors: List[str],
     outcome: str,
     classes: List[Any],
+    database_label: str = "default",
     num_rounds: int = 5,
     n_local_epochs: int = 1,
     strategy_name: str = "fedavg",
@@ -218,6 +230,7 @@ def master_flower(
             "predictors": predictors,
             "outcome": outcome,
             "classes": classes,
+            "database_label": database_label,
             "num_rounds": num_rounds,
             "n_local_epochs": n_local_epochs,
             "strategy_name": strategy_name,
@@ -236,6 +249,7 @@ def _master_flower_core(
     predictors: List[str],
     outcome: str,
     classes: List[Any],
+    database_label: str = "default",
     num_rounds: int = 5,
     n_local_epochs: int = 1,
     strategy_name: str = "fedavg",
@@ -275,6 +289,7 @@ def _master_flower_core(
             params=global_params,
             predictors=predictors,
             outcome=outcome,
+            database_label=database_label,
             n_local_epochs=n_local_epochs,
             # Pass-through extras
             model_kwargs=model_kwargs

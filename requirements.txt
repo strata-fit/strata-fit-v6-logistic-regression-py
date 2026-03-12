@@ -1,4 +1,4 @@
-v6-federated-algo-core-py @ git+ssh://git@github.com/mdw-nl/v6-federated-algo-core-v6.git@c3c23c1b70a4a5cc4283ddf6e38bfdd3d4a08a73
+v6-federated-algo-core-py @ git+ssh://git@github.com/mdw-nl/v6-federated-algo-core-v6.git
 pydantic>=2,<3
 vantage6>=4.8.2
 pandas>=1.3.5

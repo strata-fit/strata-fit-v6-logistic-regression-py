@@ -100,6 +100,7 @@ def master_flower_handler(
         predictors=data.predictors,
         outcome=data.outcome,
         classes=data.classes,
+        database_label=data.database_label,
         num_rounds=data.num_rounds,
         n_local_epochs=data.n_local_epochs,
         strategy_name=data.strategy_name,

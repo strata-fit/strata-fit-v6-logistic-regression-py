@@ -47,6 +47,7 @@ class MasterFlowerInput(BaseModel):
     predictors: List[str] = Field(min_length=1)
     outcome: str
     classes: List[Any] = Field(min_length=1)
+    database_label: str = "default"
     num_rounds: int = 5
     n_local_epochs: int = 1
     strategy_name: str = "fedavg"

@@ -12,7 +12,7 @@ license = { file = "LICENSE" }
 keywords = ["Vantage6", "Federated Algorithms", "Supervised Learning"]
 dependencies = [
     "vantage6-client",
-    "v6-federated-algo-core-py @ git+ssh://git@github.com/mdw-nl/v6-federated-algo-core-v6.git@c3c23c1b70a4a5cc4283ddf6e38bfdd3d4a08a73",
+    "v6-federated-algo-core-py @ git+ssh://git@github.com/mdw-nl/v6-federated-algo-core-v6.git",
     "pydantic>=2,<3",
     "vantage6-algorithm-tools>=4.13.1",
     "pandas>=1.2.1",
