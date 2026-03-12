@@ -1,102 +1,120 @@
-# Vantage6 algorithm for logistic regression
+# Vantage6 sklearn linear package
 
-This algorithm was designed for the [vantage6](https://vantage6.ai/) 
-architecture. 
+This package is designed for the [vantage6](https://vantage6.ai/) architecture.
 
-## Input data
+Research-only notice: this code may still show unexpected behavior and should be
+treated as research/prototyping software for now.
 
-The algorithm expects each data node to hold data that adheres to the same 
-standard.
+## Supported methods
 
-## Using the algorithm
+- `master_flower`
+- `logistic_regression_partial`
+- `compute_loss_partial`
+- `run_validation`
 
-Below you can see an example of how to run the algorithm:
+## Sending tasks with GHCR images
 
-``` python
+Nodes do not need a local clone of this repository. They only need network
+access and permissions to pull the image you submit in `task.create(image=...)`.
+
+Use a GHCR image reference, for example:
+
+- `ghcr.io/strata-fit/v6-sklearn-linear-py:latest`
+
+If the GHCR package is private, configure Docker credentials on each node host
+so node containers can pull from GHCR.
+
+### Example: binary classification task
+
+```python
 import time
 from vantage6.client import Client
 
-# Initialise the client
-client = Client('http://127.0.0.1', 5000, '/api')
-client.authenticate('username', 'password')
+client = Client("http://127.0.0.1", 5070, "/api")
+client.authenticate("gamma-user", "gamma-password")
 client.setup_encryption(None)
 
-# Define algorithm input
+collab_id = 1
+master_org_id = 3
+org_ids = [1, 2, 3, 4, 5]
+
 input_ = {
-    'method': 'master',
-    'master': True,
-    'kwargs': {
-        'org_ids': [2, 3],          # organisations to run algorithm
-        'predictors': ['c1', 'c2'], # columns to be used as predictors
-        'outcome': 'outcome',       # column to be used as outcome
-        'classes': [0, 1],          # classes to be predicted
-        'max_iter': 15,             # maximum number of iterations to perform
-        'delta': 0.01,              # threshold loss difference for convergence
-    }
+    "master": True,
+    "method": "master_flower",
+    "kwargs": {
+        "org_ids": org_ids,
+        "predictors": ["f0", "f1", "f2", "f3", "f4", "f5"],
+        "outcome": "target",
+        "classes": [0, 1],
+        "database_label": "default",
+        "num_rounds": 2,
+        "n_local_epochs": 1,
+        "strategy_name": "fedavg",
+        "strategy_kwargs": {},
+        "model_kwargs": {
+            "penalty": "l2",
+            "solver": "lbfgs",
+            "class_weight": "balanced",
+            "C": 1.0,
+            "max_iter": 200,
+        },
+    },
 }
 
-# Send the task to the central server
 task = client.task.create(
-    collaboration=1,
-    organizations=[2, 3],
-    name='v6-logistic-regression-py',
-    image='ghcr.io/maastrichtu-cds/v6-logistic-regression-py:latest',
-    description='run logistic regression',
-    input=input_,
-    data_format='json'
+    collaboration=collab_id,
+    organizations=[master_org_id],
+    name="ghcr-binary-l2",
+    image="ghcr.io/strata-fit/v6-sklearn-linear-py:latest",
+    description="binary logistic l2",
+    input_=input_,
+    databases=[{"label": "default"}],
 )
 
-# Retrieve the results
-task_info = client.task.get(task['id'], include_results=True)
-while not task_info.get('complete'):
-    task_info = client.task.get(task['id'], include_results=True)
-    time.sleep(1)
-result_info = client.result.list(task=task_info['id'])
-results = result_info['data'][0]['result']
+while True:
+    status = client.task.get(task["id"])["status"]
+    if status in {"completed", "failed", "crashed", "cancelled", "non-existing Docker image"}:
+        break
+    time.sleep(2)
+
+print("task status:", status)
+print("result rows:", client.result.from_task(task["id"])["data"])
+```
+
+### Example: continuous outcome task
+
+For continuous/regression-style runs, pass `classes=None`:
+
+```python
+input_["kwargs"].update(
+    {
+        "predictors": ["f1", "f2", "f3", "f4", "f5"],
+        "outcome": "f0",
+        "classes": None,
+        "model_kwargs": {
+            "model_class": "ElasticNet",
+            "alpha": 0.1,
+            "l1_ratio": 0.5,
+            "max_iter": 300,
+        },
+    }
+)
 ```
 
 ## Testing locally
 
-If you wish to test the algorithm locally, you can create a Python virtual 
-environment, using your favourite method, and do the following:
-
-``` bash
+```bash
+python -m venv .venv
 source .venv/bin/activate
 pip install -e .
-python v6_kmeans_py/example.py
+python test/test.py
 ```
 
-The algorithm was developed and tested with Python 3.7.
+## Manual Infra Smoke in GitHub Actions
 
-## Manual Infra Smoke In GitHub Actions
-
-This repo includes a manual workflow:
+Workflow:
 
 - `.github/workflows/manual_infra_smoke.yml`
 
-It runs end-to-end infra-backed smoke tests by:
-
-1. Checking out `v6-infrastructure-sh` at a selectable ref.
-2. Generating a lean `nodes.env` from `tests/infra/generate_nodes_env.sh`.
-3. Building this algorithm image and publishing it to a local registry on the runner.
-4. Starting infra and submitting L2 / ElasticNet tasks via `tests/infra/run_algo_smoke.py`.
-5. Running `infra.sh test` and tearing down infrastructure.
-
-Lean infra defaults live in:
-
-- `tests/infra/config.env`
-
-Main workflow inputs:
-
-- `node_count`
-- `elasticnet_node_count`
-- `run_l2`
-- `run_elasticnet`
-- `num_rounds`
-- `n_local_epochs`
-- `vantage6_version`
-- `infra_ref`
-- `infra_repository`
-
-If `infra_repository` is private and not accessible with `GITHUB_TOKEN`, add
-repository secret `INFRA_REPO_TOKEN` (read access to that infra repo).
+It runs end-to-end infra-backed smoke tests using configurable node counts and
+vantage6 version defaults (currently `4.13.3`).
