@@ -3,7 +3,7 @@ from pathlib import Path
 from sklearn.linear_model import LogisticRegression
 from vantage6.algorithm.tools.mock_client import MockAlgorithmClient
 
-from v6_logistic_regression_py.helper import initialize_model
+from v6_sklearn_linear_py.helper import initialize_model
 
 STRATEGIES = [
     ("fedavg", {}),
@@ -21,7 +21,7 @@ def main() -> None:
         for i in range(1, 5)
     ]
 
-    client = MockAlgorithmClient(datasets=datasets, module="v6_logistic_regression_py")
+    client = MockAlgorithmClient(datasets=datasets, module="v6_sklearn_linear_py")
     org_ids = [org["id"] for org in client.organization.list()]
 
     partial_task = client.task.create(

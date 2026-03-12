@@ -1,6 +1,6 @@
-v6-federated-algo-core-py @ git+ssh://git@github.com/mdw-nl/v6-federated-algo-core-v6.git
+v6-federated-algo-core-py @ https://github.com/mdw-nl/v6-federated-algo-core-v6/archive/refs/heads/main.tar.gz
 pydantic>=2,<3
-vantage6>=4.8.2
+vantage6>=4.13.3
 pandas>=1.3.5
 scipy>=1.7.3
 scikit-learn>=1.0.2

@@ -3,8 +3,8 @@ import pandas as pd
 from sklearn.metrics import confusion_matrix
 from sklearn.linear_model import LogisticRegression, ElasticNet
 from vantage6.algorithm.tools.mock_client import MockAlgorithmClient
-from v6_logistic_regression_py import master_flower
-from v6_logistic_regression_py.helper import initialize_model
+from v6_sklearn_linear_py import master_flower
+from v6_sklearn_linear_py.helper import initialize_model
 
 data_dir = Path('./data')
 ds1 = {"database": data_dir/"data_bucket1.csv", "db_type": "csv"}
@@ -15,7 +15,7 @@ ds4 = {"database": data_dir/"data_bucket4.csv", "db_type": "csv"}
 datasets = [[ds1], [ds2], [ds3], [ds4]]
 
 
-client = MockAlgorithmClient(datasets=datasets, module='v6_logistic_regression_py')
+client = MockAlgorithmClient(datasets=datasets, module='v6_sklearn_linear_py')
 orgs = client.organization.list()
 org_ids = [o["id"] for o in orgs]
 

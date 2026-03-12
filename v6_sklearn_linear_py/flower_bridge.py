@@ -109,8 +109,11 @@ def _model_attrs_to_ndarrays(ma: Dict[str, Any]) -> List[np.ndarray]:
     inter = np.array(ma["intercept_"])
     return [coef, inter]
 
-def _ndarrays_to_model_attrs(nds: List[np.ndarray], classes: np.ndarray) -> Dict[str, Any]:
-    return {"coef_": nds[0], "intercept_": nds[1], "classes_": classes}
+def _ndarrays_to_model_attrs(nds: List[np.ndarray], classes: Optional[np.ndarray]) -> Dict[str, Any]:
+    attrs = {"coef_": nds[0], "intercept_": nds[1]}
+    if classes is not None:
+        attrs["classes_"] = classes
+    return attrs
 
 def _params_to_payload(p: Parameters) -> Dict[str, Any]:
     "Flower Parameters -> JSON payload"
@@ -211,7 +214,7 @@ def master_flower(
     org_ids: List[int],
     predictors: List[str],
     outcome: str,
-    classes: List[Any],
+    classes: Optional[List[Any]] = None,
     database_label: str = "default",
     num_rounds: int = 5,
     n_local_epochs: int = 1,
@@ -220,7 +223,7 @@ def master_flower(
     strategy_kwargs: Optional[Dict[str, Any]] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    from v6_logistic_regression_py.methods import METHOD_REGISTRY
+    from v6_sklearn_linear_py.methods import METHOD_REGISTRY
 
     envelope = dispatch_registered_method(
         METHOD_REGISTRY,
@@ -248,7 +251,7 @@ def _master_flower_core(
     org_ids: List[int],
     predictors: List[str],
     outcome: str,
-    classes: List[Any],
+    classes: Optional[List[Any]] = None,
     database_label: str = "default",
     num_rounds: int = 5,
     n_local_epochs: int = 1,
@@ -265,8 +268,8 @@ def _master_flower_core(
     model_kwargs = model_kwargs or {}
 
     n_features = len(predictors)
-    n_classes = len(classes)
-    classes_arr = np.array(classes)
+    n_classes = len(classes) if classes else 1
+    classes_arr = np.array(classes) if classes is not None else None
 
     # Initial global params (zeros)
     global_params = _zeros_params(n_classes, n_features)
@@ -312,12 +315,14 @@ def _master_flower_core(
     # Return final model as your V6-style attribute dict
     final_nds = parameters_to_ndarrays(global_params)
     final_attrs = _ndarrays_to_model_attrs(final_nds, classes_arr)
+    model_attributes = {
+        "coef_": final_attrs["coef_"].tolist(),
+        "intercept_": final_attrs["intercept_"].tolist(),
+    }
+    if "classes_" in final_attrs:
+        model_attributes["classes_"] = final_attrs["classes_"].tolist()
     info("[master_flower] Finished")
     return {
-        "model_attributes": {
-            "coef_": final_attrs["coef_"].tolist(),
-            "intercept_": final_attrs["intercept_"].tolist(),
-            "classes_": final_attrs["classes_"].tolist(),
-        },
+        "model_attributes": model_attributes,
         "history": history,
     }

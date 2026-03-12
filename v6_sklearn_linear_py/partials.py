@@ -2,6 +2,7 @@ import warnings
 
 import numpy as np
 import pandas as pd
+from sklearn.base import ClassifierMixin
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import log_loss
 from sklearn.metrics import confusion_matrix
@@ -11,7 +12,7 @@ from vantage6.algorithm.tools.util import info
 from vantage6.algorithm.tools.decorators import algorithm_client, data
 from v6_federated_core import MethodContext, dispatch_registered_method, to_v6_result
 
-from v6_logistic_regression_py.helper import (
+from v6_sklearn_linear_py.helper import (
     coordinate_task,
     export_model,
     filter_model_init_kwargs,
@@ -31,7 +32,7 @@ def logistic_regression_partial(
     model_class: Union[str, Type[LogisticRegression]] = LogisticRegression,
     **model_kwargs
 ) -> Dict[str, any]:
-    from v6_logistic_regression_py.methods import METHOD_REGISTRY
+    from v6_sklearn_linear_py.methods import METHOD_REGISTRY
 
     envelope = dispatch_registered_method(
         METHOD_REGISTRY,
@@ -118,7 +119,7 @@ def compute_loss_partial(
     outcome: str,
     model_class: Union[str, Type[LogisticRegression]] = LogisticRegression,
 ) -> Dict[str, Any]:
-    from v6_logistic_regression_py.methods import METHOD_REGISTRY
+    from v6_sklearn_linear_py.methods import METHOD_REGISTRY
 
     envelope = dispatch_registered_method(
         METHOD_REGISTRY,
@@ -172,8 +173,13 @@ def _compute_loss_partial(
     model_cls = resolve_linear_model_class(model_class)
     model = initialize_model(model_cls, model_attributes)
 
-    # Compute loss
-    loss = log_loss(y, model.predict_proba(X))
+    # Compute a classification loss when probabilities are available, otherwise MSE.
+    if isinstance(model, ClassifierMixin) and hasattr(model, "predict_proba"):
+        labels = getattr(model, "classes_", None)
+        loss = log_loss(y, model.predict_proba(X), labels=labels)
+    else:
+        y_pred = model.predict(X)
+        loss = float(np.mean((y - y_pred) ** 2))
 
     return {
         'loss': loss,
@@ -190,7 +196,7 @@ def run_validation(
     outcome: str,
     model_class: Union[str, Type[LogisticRegression]] = LogisticRegression,
 ) -> Dict[str, Any]:
-    from v6_logistic_regression_py.methods import METHOD_REGISTRY
+    from v6_sklearn_linear_py.methods import METHOD_REGISTRY
 
     envelope = dispatch_registered_method(
         METHOD_REGISTRY,
@@ -245,7 +251,7 @@ def _run_validation(
     X = df[predictors].values
     y = df[outcome].values
 
-    # Initialize LogisticRegression estimator
+    # Initialize estimator
     # Build attributes dict from legacy list/tuple or explicit dict
     if isinstance(parameters, dict):
         model_attributes = {k: np.array(v) for k, v in parameters.items()}
@@ -259,20 +265,32 @@ def _run_validation(
     else:
         raise TypeError("parameters must be a dict or a list/tuple")
 
-    if classes is not None:
-        model_attributes["classes_"] = np.array(classes)
     model_cls = resolve_linear_model_class(model_class)
+    is_classification = issubclass(model_cls, ClassifierMixin)
+
+    if classes is not None and is_classification:
+        model_attributes["classes_"] = np.array(classes)
+    if not is_classification:
+        model_attributes.pop("classes_", None)
+
     model = initialize_model(model_cls, model_attributes)
 
-    # Compute model accuracy
+    # Compute score (accuracy for classifiers, R^2 for regressors)
     score = model.score(X, y)
 
     result: Dict[str, Any] = {'score': score}
 
-    # Compute confusion matrix only when classes are available (classification case)
-    if hasattr(model, "classes_"):
+    # Confusion matrix is only defined for classification outputs.
+    if is_classification:
+        labels = classes if classes is not None else getattr(model, "classes_", None)
+        if labels is not None:
+            labels = list(labels)
+    else:
+        labels = None
+
+    if labels:
         result['confusion_matrix'] = confusion_matrix(
-            y, model.predict(X), labels=model.classes_
+            y, model.predict(X), labels=labels
         ).tolist()
 
     return result

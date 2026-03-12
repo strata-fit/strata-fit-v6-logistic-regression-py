@@ -3,16 +3,16 @@ requires = ["setuptools>=61", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "v6_logistic_regression_py"
+name = "v6_sklearn_linear_py"
 version = "1.0.0"
-description = "Vantage6 algorithm for logistic regression"
+description = "Vantage6 algorithm package for sklearn linear models"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
 keywords = ["Vantage6", "Federated Algorithms", "Supervised Learning"]
 dependencies = [
     "vantage6-client",
-    "v6-federated-algo-core-py @ git+ssh://git@github.com/mdw-nl/v6-federated-algo-core-v6.git",
+    "v6-federated-algo-core-py @ https://github.com/mdw-nl/v6-federated-algo-core-v6/archive/refs/heads/main.tar.gz",
     "pydantic>=2,<3",
     "vantage6-algorithm-tools>=4.13.1",
     "pandas>=1.2.1",
@@ -28,7 +28,7 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/MaastrichtU-CDS/v6-logistic-regression-py"
+Homepage = "https://github.com/strata-fit/strata-fit-v6-sklearn-linear-py"
 
 [tool.setuptools.packages.find]
-include = ["v6_logistic_regression_py*"]
+include = ["v6_sklearn_linear_py*"]
