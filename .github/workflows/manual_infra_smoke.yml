@@ -1,0 +1,145 @@
+name: Manual Infra Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      node_count:
+        description: "Number of infra nodes (2-8)"
+        required: true
+        default: "5"
+      elasticnet_node_count:
+        description: "Number of nodes for ElasticNet task"
+        required: true
+        default: "4"
+      run_l2:
+        description: "Run Logistic L2 task"
+        required: true
+        type: boolean
+        default: true
+      run_elasticnet:
+        description: "Run ElasticNet task"
+        required: true
+        type: boolean
+        default: true
+      num_rounds:
+        description: "Federated rounds"
+        required: true
+        default: "2"
+      n_local_epochs:
+        description: "Local iterations/epochs"
+        required: true
+        default: "1"
+      vantage6_version:
+        description: "vantage6 infra version"
+        required: true
+        default: "4.13.3"
+      infra_ref:
+        description: "v6-infrastructure-sh ref (branch/tag/SHA)"
+        required: true
+        default: "feat/refactor_n_nodes"
+      infra_repository:
+        description: "Infra harness repository"
+        required: true
+        default: "mdw-nl/v6-infrastructure-sh"
+
+jobs:
+  infra-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout algorithm repository
+        uses: actions/checkout@v4
+
+      - name: Checkout infra harness
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.infra_repository }}
+          ref: ${{ inputs.infra_ref }}
+          path: tools/v6-infra
+          token: ${{ secrets.INFRA_REPO_TOKEN || github.token }}
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Prepare local image registry
+        run: |
+          docker run -d --restart unless-stopped -p 5000:5000 --name v6-local-registry registry:2
+
+      - name: Build and publish algorithm image to local registry
+        env:
+          IMAGE_TAG: ci-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          docker build -t "localhost:5000/v6-sklearn-linear-py:${IMAGE_TAG}" .
+          docker push "localhost:5000/v6-sklearn-linear-py:${IMAGE_TAG}"
+          echo "V6_ALGO_IMAGE=localhost:5000/v6-sklearn-linear-py:${IMAGE_TAG}" >> "$GITHUB_ENV"
+
+      - name: Generate dynamic infra node config
+        run: |
+          bash tests/infra/generate_nodes_env.sh \
+            "${{ inputs.node_count }}" \
+            "$GITHUB_WORKSPACE/data" \
+            "$GITHUB_WORKSPACE/tools/v6-infra/infrastructure/nodes.env"
+
+      - name: Inject lean infra config
+        run: |
+          cp tests/infra/config.env tools/v6-infra/infrastructure/config.env
+          {
+            echo "VERSION_VANTAGE6=${{ inputs.vantage6_version }}"
+            echo "COLLABORATION_NAME=linear-ci-${{ github.run_id }}-${{ github.run_attempt }}"
+            echo "UI_ENABLED=false"
+            echo "SERVER_URL=http://host.docker.internal"
+            echo "NODES_CONFIG=$GITHUB_WORKSPACE/tools/v6-infra/infrastructure/nodes.env"
+          } >> tools/v6-infra/infrastructure/config.env
+
+      - name: Start infrastructure
+        working-directory: tools/v6-infra/infrastructure
+        env:
+          ENVIRONMENT: CI
+          PYTHON_INTERPRETER: python3.12
+        run: |
+          ./infra.sh preflight
+          ./infra.sh up
+
+      - name: Install smoke runner dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "vantage6-client==${{ inputs.vantage6_version }}"
+
+      - name: Run algorithm smoke tasks
+        env:
+          V6_SERVER_HOST: http://localhost
+          V6_SERVER_PORT: "5070"
+          V6_API_PATH: /api
+          V6_COLLABORATION_NAME: linear-ci-${{ github.run_id }}-${{ github.run_attempt }}
+          V6_ALGO_IMAGE: ${{ env.V6_ALGO_IMAGE }}
+          V6_NODE_COUNT: ${{ inputs.node_count }}
+          V6_ELASTICNET_NODE_COUNT: ${{ inputs.elasticnet_node_count }}
+          V6_RUN_L2: ${{ inputs.run_l2 }}
+          V6_RUN_ELASTICNET: ${{ inputs.run_elasticnet }}
+          V6_NUM_ROUNDS: ${{ inputs.num_rounds }}
+          V6_N_LOCAL_EPOCHS: ${{ inputs.n_local_epochs }}
+        run: |
+          python tests/infra/run_algo_smoke.py
+
+      - name: Run infra smoke tests
+        working-directory: tools/v6-infra/infrastructure
+        run: |
+          ./infra.sh test
+
+      - name: Dump diagnostics on failure
+        if: failure()
+        run: |
+          docker ps -a
+          docker logs v6-local-registry || true
+
+      - name: Tear down infrastructure
+        if: always()
+        working-directory: tools/v6-infra/infrastructure
+        env:
+          ENVIRONMENT: CI
+        run: |
+          ./infra.sh down
+          docker rm -f v6-local-registry || true

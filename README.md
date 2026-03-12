@@ -67,3 +67,36 @@ python v6_kmeans_py/example.py
 ```
 
 The algorithm was developed and tested with Python 3.7.
+
+## Manual Infra Smoke In GitHub Actions
+
+This repo includes a manual workflow:
+
+- `.github/workflows/manual_infra_smoke.yml`
+
+It runs end-to-end infra-backed smoke tests by:
+
+1. Checking out `v6-infrastructure-sh` at a selectable ref.
+2. Generating a lean `nodes.env` from `tests/infra/generate_nodes_env.sh`.
+3. Building this algorithm image and publishing it to a local registry on the runner.
+4. Starting infra and submitting L2 / ElasticNet tasks via `tests/infra/run_algo_smoke.py`.
+5. Running `infra.sh test` and tearing down infrastructure.
+
+Lean infra defaults live in:
+
+- `tests/infra/config.env`
+
+Main workflow inputs:
+
+- `node_count`
+- `elasticnet_node_count`
+- `run_l2`
+- `run_elasticnet`
+- `num_rounds`
+- `n_local_epochs`
+- `vantage6_version`
+- `infra_ref`
+- `infra_repository`
+
+If `infra_repository` is private and not accessible with `GITHUB_TOKEN`, add
+repository secret `INFRA_REPO_TOKEN` (read access to that infra repo).
