@@ -4,7 +4,13 @@ import numpy as np
 from vantage6.algorithm.client import AlgorithmClient
 from vantage6.algorithm.tools.util import info
 from vantage6.algorithm.tools.decorators import algorithm_client
-from v6_federated_core import MethodContext, dispatch_registered_method, to_v6_result
+from v6_federated_core import (
+    MethodContext,
+    PartialFailureError,
+    dispatch_registered_method,
+    parse_result_envelope,
+    to_v6_result,
+)
 
 from flwr.common import (
     Parameters,
@@ -140,6 +146,55 @@ def _mk_fitres(updated_params: Parameters, num_examples: int, metrics: Dict[str,
     )
 
 
+def _require_partial_payload(
+    raw_result: Any,
+    *,
+    result_index: int,
+) -> Dict[str, Any]:
+    """Unwrap and validate a node fit result payload."""
+    envelope = parse_result_envelope(raw_result)
+    if envelope is not None:
+        if not envelope.ok:
+            first_error = envelope.errors[0] if envelope.errors else None
+            raise PartialFailureError(
+                "Node returned a failure envelope for 'logistic_regression_partial'"
+                + (f": {first_error.message}" if first_error else ""),
+                meta={
+                    "method": "logistic_regression_partial",
+                    "result_index": result_index,
+                    "error_count": len(envelope.errors),
+                    "errors": [error.model_dump() for error in envelope.errors],
+                },
+            )
+        payload = envelope.payload or {}
+    else:
+        payload = raw_result
+
+    if not isinstance(payload, dict):
+        raise PartialFailureError(
+            "Node fit payload is not a dictionary",
+            meta={
+                "method": "logistic_regression_partial",
+                "result_index": result_index,
+                "payload_type": type(payload).__name__,
+            },
+        )
+
+    model_attributes = payload.get("model_attributes")
+    size = payload.get("size")
+    if not isinstance(model_attributes, dict) or size is None:
+        raise PartialFailureError(
+            "Node fit payload missing required keys: 'model_attributes' and 'size'",
+            meta={
+                "method": "logistic_regression_partial",
+                "result_index": result_index,
+                "payload_keys": sorted(payload.keys()),
+            },
+        )
+
+    return payload
+
+
 def _broadcast_fit_and_collect(
     client: AlgorithmClient,
     org_ids: List[int],
@@ -156,6 +211,14 @@ def _broadcast_fit_and_collect(
       kwargs={'model_attributes': ..., 'predictors': ..., 'outcome': ...}
     Returns Flower-like FitRes entries for strategy.aggregate_fit.
     """
+    if params is None:
+        raise PartialFailureError(
+            "Global parameters are missing before broadcasting fit tasks",
+            meta={
+                "method": "master_flower",
+            },
+        )
+
     # Convert Parameters -> model_attributes payload the partial expects
     nds = parameters_to_ndarrays(params)
     # classes_ are not embedded in Flower Parameters; pass None here.
@@ -184,14 +247,50 @@ def _broadcast_fit_and_collect(
         task_create_kwargs.pop("databases", None)
         task = client.task.create(**task_create_kwargs)
     results = client.wait_for_results(task_id=task["id"], interval=1)
+    if not isinstance(results, list):
+        raise PartialFailureError(
+            "Node fit task returned a non-list results payload",
+            meta={
+                "method": "logistic_regression_partial",
+                "results_type": type(results).__name__,
+            },
+        )
+    if len(results) == 0:
+        raise PartialFailureError(
+            "No node fit results were returned. One or more child runs likely crashed.",
+            meta={
+                "method": "logistic_regression_partial",
+                "expected_organizations": org_ids,
+            },
+        )
+    if len(results) < len(org_ids):
+        raise PartialFailureError(
+            "Incomplete node fit results returned; at least one child run failed",
+            meta={
+                "method": "logistic_regression_partial",
+                "expected_results": len(org_ids),
+                "received_results": len(results),
+                "expected_organizations": org_ids,
+            },
+        )
 
     fit_results: List[Tuple[None, FitRes]] = []
-    for res in results:
-        # res: {'model_attributes': {...}, 'size': int}
-        ma = res["model_attributes"]
+    for idx, res in enumerate(results):
+        payload = _require_partial_payload(res, result_index=idx)
+        ma = payload["model_attributes"]
         nds_upd = _model_attrs_to_ndarrays(ma)
         updated_params = ndarrays_to_parameters(nds_upd)
-        nexp = int(res["size"])
+        try:
+            nexp = int(payload["size"])
+        except (TypeError, ValueError):
+            raise PartialFailureError(
+                "Node fit payload contains a non-integer 'size'",
+                meta={
+                    "method": "logistic_regression_partial",
+                    "result_index": idx,
+                    "size_value": payload.get("size"),
+                },
+            ) from None
         fit_results.append((None, _mk_fitres(updated_params, nexp, metrics={})))
     return fit_results
 
@@ -293,8 +392,24 @@ def _master_flower_core(
         # Aggregate with Flower strategy
         agg = strat.aggregate_fit(rnd, fit_results, failures=[])
         if agg is None:
-            raise RuntimeError("Aggregation returned None")
+            raise PartialFailureError(
+                "Aggregation returned None",
+                meta={
+                    "round": rnd,
+                    "strategy_name": strategy_name,
+                    "fit_result_count": len(fit_results),
+                },
+            )
         global_params, _ = agg
+        if global_params is None:
+            raise PartialFailureError(
+                "Aggregation returned empty global parameters",
+                meta={
+                    "round": rnd,
+                    "strategy_name": strategy_name,
+                    "fit_result_count": len(fit_results),
+                },
+            )
 
         # (Optional) Evaluate similarly via a compute_loss/eval partial
         # and strat.aggregate_evaluate(...)
