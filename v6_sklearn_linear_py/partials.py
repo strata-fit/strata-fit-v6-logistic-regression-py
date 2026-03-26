@@ -82,7 +82,7 @@ def _logistic_regression_partial(
         Attributes of locally trained logistic regression model and local dataset size.
     """
     # Drop rows with NaNs
-    df = df.dropna(how='any')
+    df = df[predictors + [outcome]].dropna(how='any')
 
     # Get features and outcomes
     X = df[predictors].values
@@ -163,7 +163,7 @@ def _compute_loss_partial(
         Local loss and dataset size.
     """
     # Drop rows with NaNs
-    df = df.dropna(how='any')
+    df = df[predictors + [outcome]].dropna(how='any')
 
     # Get features and outcomes
     X = df[predictors].values
@@ -245,7 +245,7 @@ def _run_validation(
         Performance metrics including model accuracy and confusion matrix.
     """
     # Drop rows with NaNs
-    df = df.dropna(how='any')
+    df = df[predictors + [outcome]].dropna(how='any')
 
     # Get features and outcomes
     X = df[predictors].values

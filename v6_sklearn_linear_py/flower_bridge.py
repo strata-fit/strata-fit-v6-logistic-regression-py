@@ -187,14 +187,6 @@ def _broadcast_fit_and_collect(
 
     fit_results: List[Tuple[None, FitRes]] = []
     for res in results:
-        if isinstance(res, dict) and "ok" in res:
-            error_messages = ", ".join(
-                error.get("message", "unknown error") for error in res.get("errors", [])
-            )
-            raise RuntimeError(
-                "Node fit task returned a failure envelope"
-                + (f": {error_messages}" if error_messages else "")
-            )
         # res: {'model_attributes': {...}, 'size': int}
         ma = res["model_attributes"]
         nds_upd = _model_attrs_to_ndarrays(ma)
