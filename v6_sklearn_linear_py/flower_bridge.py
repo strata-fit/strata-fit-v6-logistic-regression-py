@@ -1,9 +1,16 @@
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from vantage6.algorithm.client import AlgorithmClient
 from vantage6.algorithm.tools.util import info
 from vantage6.algorithm.tools.decorators import algorithm_client
+from v6_federated_core import (
+    MethodContext,
+    PartialFailureError,
+    dispatch_registered_method,
+    parse_result_envelope,
+    to_v6_result,
+)
 
 from flwr.common import (
     Parameters,
@@ -82,16 +89,13 @@ def _strategy_from_name(name: str, **cfg):
     # --- ensure initial_parameters is a real Flower Parameters for FedOpt-family ---
     if key in {"fedadam", "fedadagrad", "fedyogi", "fedavgm"}:
         ip = cfg.get("initial_parameters", None)
-        print(ip)
         if ip is None:
-            print("No initial parameters")
             if n_features is None or n_classes is None:
                 raise ValueError(
                     "Strategy requires initial_parameters; supply it explicitly "
                     "or pass n_features and n_classes so the bridge can build zeros."
                 )
             cfg["initial_parameters"] = _make_initial_parameters(n_features, n_classes)
-            print("Initial parameters", cfg["initial_parameters"])
         else:
             # make robust: accept lists/np arrays or our JSON-style {"arrays":[...]}
             try:
@@ -111,8 +115,11 @@ def _model_attrs_to_ndarrays(ma: Dict[str, Any]) -> List[np.ndarray]:
     inter = np.array(ma["intercept_"])
     return [coef, inter]
 
-def _ndarrays_to_model_attrs(nds: List[np.ndarray], classes: np.ndarray) -> Dict[str, Any]:
-    return {"coef_": nds[0], "intercept_": nds[1], "classes_": classes}
+def _ndarrays_to_model_attrs(nds: List[np.ndarray], classes: Optional[np.ndarray]) -> Dict[str, Any]:
+    attrs = {"coef_": nds[0], "intercept_": nds[1]}
+    if classes is not None:
+        attrs["classes_"] = classes
+    return attrs
 
 def _params_to_payload(p: Parameters) -> Dict[str, Any]:
     "Flower Parameters -> JSON payload"
@@ -125,8 +132,9 @@ def _payload_to_params(payload: Dict[str, Any]) -> Parameters:
     return ndarrays_to_parameters(nds)
 
 def _zeros_params(n_classes: int, n_features: int) -> Parameters:
-    coef = np.zeros((n_classes, n_features))
-    inter = np.zeros((n_classes,))
+    rows = 1 if n_classes <= 2 else n_classes
+    coef = np.zeros((rows, n_features))
+    inter = np.zeros((rows,))
     return ndarrays_to_parameters([coef, inter])
 
 def _mk_fitres(updated_params: Parameters, num_examples: int, metrics: Dict[str, float]) -> FitRes:
@@ -138,14 +146,64 @@ def _mk_fitres(updated_params: Parameters, num_examples: int, metrics: Dict[str,
     )
 
 
+def _require_partial_payload(
+    raw_result: Any,
+    *,
+    result_index: int,
+) -> Dict[str, Any]:
+    """Unwrap and validate a node fit result payload."""
+    envelope = parse_result_envelope(raw_result)
+    if envelope is not None:
+        if not envelope.ok:
+            first_error = envelope.errors[0] if envelope.errors else None
+            raise PartialFailureError(
+                "Node returned a failure envelope for 'logistic_regression_partial'"
+                + (f": {first_error.message}" if first_error else ""),
+                meta={
+                    "method": "logistic_regression_partial",
+                    "result_index": result_index,
+                    "error_count": len(envelope.errors),
+                    "errors": [error.model_dump() for error in envelope.errors],
+                },
+            )
+        payload = envelope.payload or {}
+    else:
+        payload = raw_result
+
+    if not isinstance(payload, dict):
+        raise PartialFailureError(
+            "Node fit payload is not a dictionary",
+            meta={
+                "method": "logistic_regression_partial",
+                "result_index": result_index,
+                "payload_type": type(payload).__name__,
+            },
+        )
+
+    model_attributes = payload.get("model_attributes")
+    size = payload.get("size")
+    if not isinstance(model_attributes, dict) or size is None:
+        raise PartialFailureError(
+            "Node fit payload missing required keys: 'model_attributes' and 'size'",
+            meta={
+                "method": "logistic_regression_partial",
+                "result_index": result_index,
+                "payload_keys": sorted(payload.keys()),
+            },
+        )
+
+    return payload
+
+
 def _broadcast_fit_and_collect(
     client: AlgorithmClient,
     org_ids: List[int],
     params: Parameters,
     predictors: List[str],
     outcome: str,
+    database_label: str,
     n_local_epochs: int,
-    model_kwargs: Dict[str, Any] = {},
+    model_kwargs: Optional[Dict[str, Any]] = None,
 ) -> List[Tuple[None, FitRes]]:
     """
     Calls your existing partial once per node:
@@ -153,6 +211,14 @@ def _broadcast_fit_and_collect(
       kwargs={'model_attributes': ..., 'predictors': ..., 'outcome': ...}
     Returns Flower-like FitRes entries for strategy.aggregate_fit.
     """
+    if params is None:
+        raise PartialFailureError(
+            "Global parameters are missing before broadcasting fit tasks",
+            meta={
+                "method": "master_flower",
+            },
+        )
+
     # Convert Parameters -> model_attributes payload the partial expects
     nds = parameters_to_ndarrays(params)
     # classes_ are not embedded in Flower Parameters; pass None here.
@@ -164,23 +230,67 @@ def _broadcast_fit_and_collect(
         "predictors": predictors,
         "outcome": outcome,
         "n_local_iterations": n_local_epochs,
+        **(model_kwargs or {}),
     }
 
-    input_ = {
-        "method": "logistic_regression_partial",
-        "kwargs": {**base_kwargs, **model_kwargs}
-    }
+    input_ = {"method": "logistic_regression_partial", "kwargs": base_kwargs}
 
-    task = client.task.create(input_=input_, organizations=org_ids)
+    task_create_kwargs = {
+        "input_": input_,
+        "organizations": org_ids,
+        "databases": [{"label": database_label}],
+    }
+    try:
+        task = client.task.create(**task_create_kwargs)
+    except TypeError:
+        # MockAlgorithmClient does not accept `databases`; retry without it.
+        task_create_kwargs.pop("databases", None)
+        task = client.task.create(**task_create_kwargs)
     results = client.wait_for_results(task_id=task["id"], interval=1)
+    if not isinstance(results, list):
+        raise PartialFailureError(
+            "Node fit task returned a non-list results payload",
+            meta={
+                "method": "logistic_regression_partial",
+                "results_type": type(results).__name__,
+            },
+        )
+    if len(results) == 0:
+        raise PartialFailureError(
+            "No node fit results were returned. One or more child runs likely crashed.",
+            meta={
+                "method": "logistic_regression_partial",
+                "expected_organizations": org_ids,
+            },
+        )
+    if len(results) < len(org_ids):
+        raise PartialFailureError(
+            "Incomplete node fit results returned; at least one child run failed",
+            meta={
+                "method": "logistic_regression_partial",
+                "expected_results": len(org_ids),
+                "received_results": len(results),
+                "expected_organizations": org_ids,
+            },
+        )
 
     fit_results: List[Tuple[None, FitRes]] = []
-    for res in results:
-        # res: {'model_attributes': {...}, 'size': int}
-        ma = res["model_attributes"]
+    for idx, res in enumerate(results):
+        payload = _require_partial_payload(res, result_index=idx)
+        ma = payload["model_attributes"]
         nds_upd = _model_attrs_to_ndarrays(ma)
         updated_params = ndarrays_to_parameters(nds_upd)
-        nexp = int(res["size"])
+        try:
+            nexp = int(payload["size"])
+        except (TypeError, ValueError):
+            raise PartialFailureError(
+                "Node fit payload contains a non-integer 'size'",
+                meta={
+                    "method": "logistic_regression_partial",
+                    "result_index": idx,
+                    "size_value": payload.get("size"),
+                },
+            ) from None
         fit_results.append((None, _mk_fitres(updated_params, nexp, metrics={})))
     return fit_results
 
@@ -195,23 +305,62 @@ def master_flower(
     org_ids: List[int],
     predictors: List[str],
     outcome: str,
-    classes: List[Any],
+    classes: Optional[List[Any]] = None,
+    database_label: str = "default",
     num_rounds: int = 5,
     n_local_epochs: int = 1,
     strategy_name: str = "fedavg",
     # Optional strategy kwargs, e.g., server_learning_rate for FedAdam/FedYogi
-    strategy_kwargs: Dict[str, Any] = {},
-    model_kwargs: Dict[str, Any] = {},
+    strategy_kwargs: Optional[Dict[str, Any]] = None,
+    model_kwargs: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    from v6_sklearn_linear_py.methods import METHOD_REGISTRY
+
+    envelope = dispatch_registered_method(
+        METHOD_REGISTRY,
+        "master_flower",
+        {
+            "org_ids": org_ids,
+            "predictors": predictors,
+            "outcome": outcome,
+            "classes": classes,
+            "database_label": database_label,
+            "num_rounds": num_rounds,
+            "n_local_epochs": n_local_epochs,
+            "strategy_name": strategy_name,
+            "strategy_kwargs": strategy_kwargs or {},
+            "model_kwargs": model_kwargs or {},
+        },
+        context=MethodContext(method="master_flower", meta={"client": client}),
+    )
+    return to_v6_result(envelope)
+
+
+def _master_flower_core(
+    client: AlgorithmClient,
+    *,
+    org_ids: List[int],
+    predictors: List[str],
+    outcome: str,
+    classes: Optional[List[Any]] = None,
+    database_label: str = "default",
+    num_rounds: int = 5,
+    n_local_epochs: int = 1,
+    strategy_name: str = "fedavg",
+    strategy_kwargs: Optional[Dict[str, Any]] = None,
+    model_kwargs: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Vantage6 master that runs Flower's server-side strategy loop
     while delegating local fits to V6 one-shot partials.
     """
     info(f"Starting Flower(master) over V6 RPC | strategy={strategy_name}")
+    strategy_kwargs = strategy_kwargs or {}
+    model_kwargs = model_kwargs or {}
 
     n_features = len(predictors)
-    n_classes = len(classes)
-    classes_arr = np.array(classes)
+    n_classes = len(classes) if classes else 1
+    classes_arr = np.array(classes) if classes is not None else None
 
     # Initial global params (zeros)
     global_params = _zeros_params(n_classes, n_features)
@@ -234,6 +383,7 @@ def master_flower(
             params=global_params,
             predictors=predictors,
             outcome=outcome,
+            database_label=database_label,
             n_local_epochs=n_local_epochs,
             # Pass-through extras
             model_kwargs=model_kwargs
@@ -242,8 +392,24 @@ def master_flower(
         # Aggregate with Flower strategy
         agg = strat.aggregate_fit(rnd, fit_results, failures=[])
         if agg is None:
-            raise RuntimeError("Aggregation returned None")
+            raise PartialFailureError(
+                "Aggregation returned None",
+                meta={
+                    "round": rnd,
+                    "strategy_name": strategy_name,
+                    "fit_result_count": len(fit_results),
+                },
+            )
         global_params, _ = agg
+        if global_params is None:
+            raise PartialFailureError(
+                "Aggregation returned empty global parameters",
+                meta={
+                    "round": rnd,
+                    "strategy_name": strategy_name,
+                    "fit_result_count": len(fit_results),
+                },
+            )
 
         # (Optional) Evaluate similarly via a compute_loss/eval partial
         # and strat.aggregate_evaluate(...)
@@ -256,12 +422,14 @@ def master_flower(
     # Return final model as your V6-style attribute dict
     final_nds = parameters_to_ndarrays(global_params)
     final_attrs = _ndarrays_to_model_attrs(final_nds, classes_arr)
+    model_attributes = {
+        "coef_": final_attrs["coef_"].tolist(),
+        "intercept_": final_attrs["intercept_"].tolist(),
+    }
+    if "classes_" in final_attrs:
+        model_attributes["classes_"] = final_attrs["classes_"].tolist()
     info("[master_flower] Finished")
     return {
-        "model_attributes": {
-            "coef_": final_attrs["coef_"].tolist(),
-            "intercept_": final_attrs["intercept_"].tolist(),
-            "classes_": final_attrs["classes_"].tolist(),
-        },
+        "model_attributes": model_attributes,
         "history": history,
     }
